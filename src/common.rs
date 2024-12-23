@@ -35,7 +35,7 @@ pub(crate) fn do_listen(listener: RawFd) -> Result<()> {
 }
 
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
+pub(crate) fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
     if let Some(addr) = addr.strip_prefix("unix://") {
         return Ok((Domain::Unix, addr));
     }
@@ -48,7 +48,7 @@ fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
+pub(crate) fn parse_sockaddr(addr: &str) -> Result<(Domain, &str)> {
     if let Some(addr) = addr.strip_prefix("unix://") {
         if addr.starts_with('@') {
             return Err(Error::Others(
@@ -104,7 +104,7 @@ fn make_addr(_domain: Domain, sockaddr: &str) -> Result<UnixAddr> {
 // addr: cid:port
 // return (cid, port)
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn parse_vscok(addr: &str) -> Result<(u32, u32)> {
+pub(crate) fn parse_vscok(addr: &str) -> Result<(u32, u32)> {
     // vsock://cid:port
     let sockaddr_port_v: Vec<&str> = addr.split(':').collect();
     if sockaddr_port_v.len() != 2 {

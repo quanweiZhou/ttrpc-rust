@@ -12,9 +12,9 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use nix::unistd::close;
-use tokio::{self, sync::mpsc, task};
+use tokio::{self, net::UnixStream, sync::mpsc, task};
 
-use crate::common::client_connect;
+use crate::common::{client_connect, parse_sockaddr, parse_vscok, Domain};
 use crate::error::{get_rpc_status, Error, Result};
 use crate::proto::{
     Code, Codec, GenMessage, Message, MessageHeader, Request, Response, FLAG_NO_DATA,
@@ -38,6 +38,42 @@ pub struct Client {
 }
 
 impl Client {
+    pub async fn async_connect(full_sock_addr: &str) -> Result<Client> {
+        let (req_tx, rx): (MessageSender, MessageReceiver) = mpsc::channel(100);
+
+        let req_map = Arc::new(Mutex::new(HashMap::new()));
+        let delegate = ClientBuilder {
+            rx: Some(rx),
+            streams: req_map.clone(),
+        };
+
+        let (domain, sock_addr) = parse_sockaddr(full_sock_addr)?;
+        match domain {
+            Domain::Unix => {
+                let stream = UnixStream::connect(sock_addr)
+                    .await
+                    .map_err(|e| Error::Socket(format!("unix stream connect error {:?}", e)))?;
+                let conn = Connection::new(stream, delegate);
+                tokio::spawn(async move { conn.run().await });
+            }
+            #[cfg(any(target_os = "linux", target_os = "android"))]
+            Domain::Vsock => {
+                let (cid, port) = parse_vscok(sock_addr)?;
+                let stream = tokio_vsock::VsockStream::connect(cid, port)
+                    .await
+                    .map_err(|e| Error::Socket(format!("vsock stream connect error {:?}", e)))?;
+                let conn = Connection::new(stream, delegate);
+                tokio::spawn(async move { conn.run().await });
+            }
+        };
+
+        Ok(Client {
+            req_tx,
+            next_stream_id: Arc::new(AtomicU32::new(1)),
+            streams: req_map,
+        })
+    }
+
     pub fn connect(sockaddr: &str) -> Result<Client> {
         let fd = unsafe { client_connect(sockaddr)? };
         Ok(Self::new(fd))
@@ -87,9 +123,7 @@ impl Client {
             .map_err(|_| Error::LocalClosed)?;
 
         let result = if timeout_nano == 0 {
-            rx.recv()
-                .await
-                .ok_or_else(|| Error::RemoteClosed)?
+            rx.recv().await.ok_or_else(|| Error::RemoteClosed)?
         } else {
             tokio::time::timeout(
                 std::time::Duration::from_nanos(timeout_nano as u64),
